@@ -854,7 +854,7 @@ HANDLE _CreateRemoteThread(HANDLE hProcess,                             // Handl
             return NULL;
 		}
 
-		if (!lpThreadId)
+		if (lpThreadId)
 			*lpThreadId = K32_GetThreadId(hThread);
 
 		return hThread;

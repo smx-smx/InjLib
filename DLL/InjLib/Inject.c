@@ -399,7 +399,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
             }
 
             // Allocate memory for function in remote process
-            if (!(pRemoteCode = _VirtualAllocEx(hProcess, 0, FunctionSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE)))
+            if (!(pRemoteCode = _VirtualAllocEx(hProcess, 0, FunctionSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)))
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
                 __leave;
@@ -417,7 +417,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
             if (pData && Size)
             {
                 // Allocate memory for data block in remote process
-                if (!(pRemoteData = _VirtualAllocEx(hProcess, 0, Size, MEM_COMMIT, PAGE_READWRITE)))
+                if (!(pRemoteData = _VirtualAllocEx(hProcess, 0, Size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)))
                 {
                     ErrorCode = ERROR_VIRTUALALLOCEX;
                     __leave;
@@ -440,7 +440,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
             FunctionSize = StubOffs.StubSize;
 
             // Allocate memory for stub code in remote process
-            if (!(pStubCode = _VirtualAllocEx(hProcess, 0, FunctionSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE)))
+            if (!(pStubCode = _VirtualAllocEx(hProcess, 0, FunctionSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)))
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
                 __leave;
@@ -507,7 +507,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
                     {
                         WaitForSingleObject(GetCurrentThread(), dwTmpTimeout);
                         if (!ReadProcessMemory(hProcess, pStubCode + StubOffs.PFinished, &
-                                               fFinished, sizeof(fFinished), &nBytesRead) || nBytesRead != Size)
+                                               fFinished, sizeof(fFinished), &nBytesRead) || nBytesRead != sizeof(fFinished))
                         {
                             ErrorCode = ERROR_READPROCESSMEMORY;
                             __leave;
@@ -941,7 +941,7 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
                 __leave;
             }
 
-            rd->pfnUserWndProc = _VirtualAllocEx(rd->hProcess, NULL, WndProcSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            rd->pfnUserWndProc = _VirtualAllocEx(rd->hProcess, NULL, WndProcSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
             if (!rd->pfnUserWndProc)
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
@@ -958,7 +958,7 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
             pStubWndProc = (PBYTE)StubOffs.StubWndProcStart;
             StubWndProcSize = StubOffs.StubWndProcSize;
 
-            rd->pfnStubWndProc = _VirtualAllocEx(rd->hProcess, NULL, StubWndProcSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            rd->pfnStubWndProc = _VirtualAllocEx(rd->hProcess, NULL, StubWndProcSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
             if (!rd->pfnStubWndProc)
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
@@ -994,7 +994,7 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
             rd->pfnOldWndProc = NULL;
 
             /*** Allocate memory in remote process and write a copy of RDATA struct to it ***/
-            rd->pRDATA = _VirtualAllocEx(rd->hProcess, NULL, rd->Size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            rd->pRDATA = _VirtualAllocEx(rd->hProcess, NULL, rd->Size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
             if (!rd->pRDATA)
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
