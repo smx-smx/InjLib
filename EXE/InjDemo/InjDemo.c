@@ -1157,7 +1157,7 @@ int WINAPI WinMain(HINSTANCE hInstance,
 			Elevated = TRUE;
 	}
 	// Vista
-	else if (osvi.dwMajorVersion == 6)
+	else if (osvi.dwMajorVersion >= 6)
 	{
 		OpenProcessToken(GetCurrentProcess(), TOKEN_READ, &hToken);
         GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &infoLen);
@@ -1178,6 +1178,7 @@ int WINAPI WinMain(HINSTANCE hInstance,
 			sei.hwnd = NULL;
 			sei.nShow = SW_NORMAL;
 
+			Sleep(1000);
 			if (!ShellExecuteEx(&sei))
 			{
 				MessageBox(NULL, TEXT("ShellExecute() failed!"), APP_TITLE, MB_OK);
