@@ -1191,7 +1191,9 @@ int WINAPI WinMain(HINSTANCE hInstance,
     EnablePrivilege(SE_DEBUG_NAME, TRUE);
 
     // Call Dialog Window
-    DialogBox(hInstance, TEXT("Inject"), NULL, DlgProc);
+    if(DialogBox(hInstance, TEXT("Inject"), NULL, DlgProc) != IDOK){
+        MessageBox(NULL, TEXT("DialogBox() failed!"), APP_TITLE, MB_OK);
+    }
 
     EnablePrivilege(SE_DEBUG_NAME, FALSE);
 
