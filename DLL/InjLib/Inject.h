@@ -52,8 +52,10 @@
 #define    ERROR_PATCH                      21
 #define    ERROR_MAX                        21
 
+struct _RDATA;
+
 // User window handler
-typedef LRESULT (WINAPI* USERWNDPROC)(PRDATA, HWND, UINT, WPARAM, LPARAM);
+typedef LRESULT (WINAPI* USERWNDPROC)(struct _RDATA, HWND, UINT, WPARAM, LPARAM);
 
 // System functions loaded dinamically
 typedef LONG (WINAPI *SETWINDOWLONG)(HWND, int, LONG);

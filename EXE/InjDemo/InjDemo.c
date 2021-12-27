@@ -529,7 +529,9 @@ typedef struct {
 #pragma check_stack(off)
 static DWORD WINAPI RemoteThread(PPARAMBLOCK pData)
 {
-    __asm mov eax,0
+    __asm__(
+        "mov $0, %eax\n\t"
+    );
 //    __asm mov [eax], eax
 
     // Return value

@@ -24,6 +24,10 @@
 
 #include  <windows.h>
 
+/** mingw **/
+#include "seh.h"
+/** mingw **/
+
 #include  "Inject.h"
 #include  "Remote.h"
 #include  "Struct.h"
@@ -85,7 +89,7 @@ DWORD GetProcessInfo(DWORD dwPID)
     PROCESS_BASIC_INFORMATION          pbi;
     PROCESS_EXTENDED_BASIC_INFORMATION ExtendedBasicInformation;
 
-    __try
+    __seh_try
     {
         /********* Win 9x *********/
         if (OSWin9x)
@@ -273,10 +277,11 @@ DWORD GetProcessInfo(DWORD dwPID)
             return MAKELONG(-1, ERROR_INVALIDOS);
     }
     // Exception ocurred
-    __except(EXCEPTION_EXECUTE_HANDLER)
+    __seh_except(EXCEPTION_EXECUTE_HANDLER)
     {
         return MAKELONG(-1, ERROR_EXCEPTION);
     }
+    __seh_end_except
 }
 
 
@@ -360,9 +365,9 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
     PBYTE       data;
 	DWORD       offset;
 
-    __try
+    __seh_try
     {
-        __try
+        __seh_try 
         {
             // Initialize ExitCode to -1
             if (ExitCode)
@@ -376,7 +381,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
             if (ProcessFlags & fINVALID)
             {
                 ErrorCode = ERROR_INVALIDPROCESS;
-                __leave;
+                __seh_leave;
             }
 
             // Get ASM code offsets
@@ -395,14 +400,14 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
             if (IsCodeSafe((PBYTE)Function, &FunctionSize) != 0)
             {
                 ErrorCode = ERROR_ISCODESAFE;
-                __leave;
+                __seh_leave;
             }
 
             // Allocate memory for function in remote process
             if (!(pRemoteCode = _VirtualAllocEx(hProcess, 0, FunctionSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)))
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
-                __leave;
+                __seh_leave;
             }
 
             // Copy function code to remote process
@@ -410,7 +415,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
                 nBytesWritten != FunctionSize)
             {
                 ErrorCode = ERROR_WRITEPROCESSMEMORY;
-                __leave;
+                __seh_leave;
             }
 
             // Data block specified ?
@@ -420,14 +425,14 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
                 if (!(pRemoteData = _VirtualAllocEx(hProcess, 0, Size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)))
                 {
                     ErrorCode = ERROR_VIRTUALALLOCEX;
-                    __leave;
+                    __seh_leave;
                 }
 
                 // Copy data block to remote process
                 if (!WriteProcessMemory(hProcess, pRemoteData, pData, Size, &nBytesWritten) || nBytesWritten != Size)
                 {
                     ErrorCode = ERROR_WRITEPROCESSMEMORY;
-                    __leave;
+                    __seh_leave;
                 }
 
                 pParams = pRemoteData;
@@ -443,7 +448,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
             if (!(pStubCode = _VirtualAllocEx(hProcess, 0, FunctionSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)))
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
-                __leave;
+                __seh_leave;
             }
 
             // Copy stub code to remote process
@@ -451,7 +456,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
                  FunctionSize, &nBytesWritten) || nBytesWritten != FunctionSize)
             {
                 ErrorCode = ERROR_WRITEPROCESSMEMORY;
-                __leave;
+                __seh_leave;
             }
 
 			// NT native process requires a different stub exit code
@@ -461,7 +466,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
             if (InitializeAndPatchStub(hProcess, pStubCode, StubOffs, (DWORD)pRemoteCode, fNative) != 0)
             {
                 ErrorCode = ERROR_PATCH;
-                __leave;
+                __seh_leave;
             }
 
             // Process not initialized
@@ -510,7 +515,7 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
                                                fFinished, sizeof(fFinished), &nBytesRead) || nBytesRead != sizeof(fFinished))
                         {
                             ErrorCode = ERROR_READPROCESSMEMORY;
-                            __leave;
+                            __seh_leave;
                         }
                     }
 
@@ -545,7 +550,7 @@ Initialized:
                     {
                         SetLastError(RtlNtStatusToDosError(Status));
                         ErrorCode = ERROR_RTLCREATETHREAD;
-                        __leave;
+                        __seh_leave;
                     }
                 }
 
@@ -565,14 +570,14 @@ Initialized:
                 if (!hThread)
                 {
                     ErrorCode = ERROR_CREATETHREAD;
-                    __leave;
+                    __seh_leave;
                 }
 
                 // Wait for thread to terminate
                 if (WaitForSingleObject(hThread, dwTimeout) != WAIT_OBJECT_0)
                 {
                     ErrorCode = ERROR_WAITTIMEOUT;
-                    __leave;
+                    __seh_leave;
                 }
 
                 // Get thread exit code
@@ -586,12 +591,12 @@ Initialized:
                 if (!ReadProcessMemory(hProcess, pRemoteData, pData, Size, &nBytesRead) || nBytesRead != Size)
                 {
                     ErrorCode = ERROR_READPROCESSMEMORY;
-                    __leave;
+                    __seh_leave;
                 }
             }
         }
         // Cleanup
-        __finally
+        __seh_finally
         {
             if (pStubCode)
                 _VirtualFreeEx(hProcess, pStubCode, 0, MEM_RELEASE);
@@ -602,12 +607,14 @@ Initialized:
             if (hThread)
                 CloseHandle(hThread);
         }
+        __seh_end_finally
     }
     // Exception ocurred
-    __except(EXCEPTION_EXECUTE_HANDLER)
+    __seh_except(EXCEPTION_EXECUTE_HANDLER)
     {
         return GetExceptionCode() | LOCAL_EXCEPTION;
     }
+    __seh_end_except
 
     // Return remote stub exit code
     if (ExitCode)
@@ -655,15 +662,15 @@ int InjectDllA(HANDLE    hProcess,       // Remote process handle
     HINSTANCE hKernel32 = 0;
     RDATADLL  rdDll;
 
-    __try
+    __seh_try
     {
-        __try
+        __seh_try
         {
             // Load Kernel32.dll
             if (!(hKernel32 = LoadLibraryA("Kernel32.dll")))
             {
                 ErrorCode = ERROR_LOADLIBRARY;
-                __leave;
+                __seh_leave;
             }
 
             // Initialize data block passed to RemoteInjectDll()
@@ -675,7 +682,7 @@ int InjectDllA(HANDLE    hProcess,       // Remote process handle
             if (!rdDll.LoadLibrary)
             {
                 ErrorCode = ERROR_GETPROCADDRESS;
-                __leave;
+                __seh_leave;
             }
 
             // Execute RemoteInjectDll() in remote process
@@ -688,17 +695,19 @@ int InjectDllA(HANDLE    hProcess,       // Remote process handle
                                &ExitCode);
         }
 
-        __finally
+        __seh_finally
         {
             if (hKernel32)
                 FreeLibrary(hKernel32);
         }
+        __seh_end_finally
     }
     // Exception ocurred
-    __except(EXCEPTION_EXECUTE_HANDLER)
+    __seh_except(EXCEPTION_EXECUTE_HANDLER)
     {
         return GetExceptionCode() | LOCAL_EXCEPTION;
     }
+    __seh_end_except
 
     // Return handle of loaded dll
     if (hRemoteDll)
@@ -783,15 +792,15 @@ int EjectDllA(HANDLE     hProcess,       // Remote process handle
     HINSTANCE hKernel32 = 0;
     RDATADLL  rdDll;
 
-    __try
+    __seh_try
     {
-        __try
+        __seh_try
         {
             // Load Kernel32.dll
             if (!(hKernel32 = LoadLibraryA("Kernel32.dll")))
             {
                 ErrorCode = ERROR_LOADLIBRARY;
-                __leave;
+                __seh_leave;
             }
 
             // Initialize data block passed to RemoteInjectDll()
@@ -805,7 +814,7 @@ int EjectDllA(HANDLE     hProcess,       // Remote process handle
             if (!rdDll.FreeLibrary || !rdDll.GetModuleHandle)
             {
                 ErrorCode = ERROR_GETPROCADDRESS;
-                __leave;
+                __seh_leave;
             }
 
             // Execute RemoteEjectDll() in remote process
@@ -818,17 +827,19 @@ int EjectDllA(HANDLE     hProcess,       // Remote process handle
                                &ExitCode);
         }
 
-        __finally
+        __seh_finally
         {
             if (hKernel32)
                 FreeLibrary(hKernel32);
         }
+        __seh_end_finally
     }
     // Exception ocurred
-    __except(EXCEPTION_EXECUTE_HANDLER)
+    __seh_except(EXCEPTION_EXECUTE_HANDLER)
     {
         return GetExceptionCode() | LOCAL_EXCEPTION;
     }
+    __seh_end_except
 
     // Return error code
     if (ErrorCode == 0 && rc != 0)
@@ -927,9 +938,9 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
     if (!rd->hProcess || !rd->hWnd)
         return ERROR_INVALIDPARAMETER;
 
-    __try
+    __seh_try
     {
-        __try
+        __seh_try
         {
             // Get ASM code offsets
             GetOffsets(&StubOffs);
@@ -938,20 +949,20 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
             if (IsCodeSafe((PBYTE)WndProc, &WndProcSize) != 0)
             {
                 ErrorCode = ERROR_ISCODESAFE;
-                __leave;
+                __seh_leave;
             }
 
             rd->pfnUserWndProc = _VirtualAllocEx(rd->hProcess, NULL, WndProcSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
             if (!rd->pfnUserWndProc)
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
-                __leave;
+                __seh_leave;
             }
 
             if (!WriteProcessMemory(rd->hProcess, rd->pfnUserWndProc, WndProc, WndProcSize, &NumBytesWritten) || NumBytesWritten != WndProcSize)
             {
                 ErrorCode = ERROR_WRITEPROCESSMEMORY;
-                __leave;
+                __seh_leave;
             }
 
             /*** Allocate memory in remote process and write a copy of StubWndProc() to it ***/
@@ -962,13 +973,13 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
             if (!rd->pfnStubWndProc)
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
-                __leave;
+                __seh_leave;
             }
 
             if (!WriteProcessMemory(rd->hProcess, rd->pfnStubWndProc, pStubWndProc, StubWndProcSize, &NumBytesWritten) || NumBytesWritten != StubWndProcSize)
             {
                 ErrorCode = ERROR_WRITEPROCESSMEMORY;
-                __leave;
+                __seh_leave;
             }
 
             // Get handle of "USER32.DLL"
@@ -976,7 +987,7 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
             if (!hUser32)
             {
                 ErrorCode = ERROR_LOADLIBRARY;
-                __leave;
+                __seh_leave;
             }
 
             // Remote window is unicode ?
@@ -988,7 +999,7 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
             if (rd->pfnSetWindowLong  == NULL || rd->pfnCallWindowProc == NULL)
             {
                 ErrorCode = ERROR_GETPROCADDRESS;
-                __leave;
+                __seh_leave;
             }
 
             rd->pfnOldWndProc = NULL;
@@ -998,20 +1009,20 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
             if (!rd->pRDATA)
             {
                 ErrorCode = ERROR_VIRTUALALLOCEX;
-                __leave;
+                __seh_leave;
             }
 
             if (!WriteProcessMemory(rd->hProcess, rd->pRDATA, rd, rd->Size, &NumBytesWritten) || NumBytesWritten != rd->Size)
             {
                 ErrorCode = ERROR_WRITEPROCESSMEMORY;
-                __leave;
+                __seh_leave;
             }
 
             // Patch pRDATA in StubWndProc()
             if (InitializeAndPatchStubWndProc(rd->hProcess, (PVOID)rd->pfnStubWndProc, StubOffs, (DWORD)rd->pRDATA) != 0)
             {
                 ErrorCode = ERROR_PATCH;
-                __leave;
+                __seh_leave;
             }
 
             // Execute RemoteStartSubclass() in remote process
@@ -1032,7 +1043,7 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
                     NumBytesRead != sizeof(rd->pfnOldWndProc))
                 {
                     ErrorCode = ERROR_READPROCESSMEMORY;
-                    __leave;
+                    __seh_leave;
                 }
 
                 if (rd->pfnOldWndProc)
@@ -1043,7 +1054,7 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
         }
 
         // Cleanup
-        __finally
+        __seh_finally
         {
             // An error ocurred ?
             if (!nSuccess)
@@ -1069,13 +1080,15 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
             if (hUser32)
                 FreeLibrary(hUser32);
         }
+        __seh_end_finally
     }
 
     // Exception ocurred
-    __except(EXCEPTION_EXECUTE_HANDLER)
+    __seh_except(EXCEPTION_EXECUTE_HANDLER)
     {
         return GetExceptionCode() | LOCAL_EXCEPTION;
     }
+    __seh_end_except
 
     // Return error code
     if (ErrorCode == 0 && rc != 0)
@@ -1120,9 +1133,9 @@ int StopRemoteSubclass(PRDATA rd)
         !rd->pfnSetWindowLong)
         return ERROR_INVALIDPARAMETER;
 
-    __try
+    __seh_try
     {
-        __try
+        __seh_try
         {
             // Execute remote RemoteStopSubclass()
             rc = RemoteExecute(rd->hProcess,
@@ -1135,7 +1148,7 @@ int StopRemoteSubclass(PRDATA rd)
         }
 
         // Cleanup
-        __finally
+        __seh_finally
         {
             // Release memory
             if (rd->pfnStubWndProc)
@@ -1153,13 +1166,15 @@ int StopRemoteSubclass(PRDATA rd)
             rd->pfnSetWindowLong = NULL;
             rd->pfnCallWindowProc = NULL;
         }
+        __seh_end_finally
     }
 
     // Exception ocurred
-    __except(EXCEPTION_EXECUTE_HANDLER)
+    __seh_except(EXCEPTION_EXECUTE_HANDLER)
     {
         return GetExceptionCode() | LOCAL_EXCEPTION;
     }
+    __seh_end_except
 
     // Return error code
     if (ErrorCode == 0 && rc != 0)

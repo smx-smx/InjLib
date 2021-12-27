@@ -24,6 +24,8 @@
 #include  "GetProcAddress.h"
 #include  "LenDis.h"
 
+#include "seh.h"
+
 /**********************
  * Find s2 within s1. *
  **********************/
@@ -56,7 +58,12 @@ char *MemSearch(char *s1, size_t len1, char *s2, size_t len2)
  ***********************************************************/
 PTIB GetTIB()
 {
-    __asm mov eax, fs:[0x18]        // Pointer to TIB (Thread Information Block)
+    PTIB tib = NULL;
+    __asm__ (
+        "mov %%fs:0x18, %0\n\t"
+    : "=r"(tib)
+    );
+    return tib;
 }
 
 
@@ -99,7 +106,7 @@ PTDB GetTDB(DWORD TID)
  *********************************************************/
 PPDB GetPDB(DWORD PID)
 {
-    PPDB pPDB;
+    PPDB pPDB = NULL;
 
     // PDB exists only in the Win9x platform
     if (!OSWin9x)
@@ -108,8 +115,10 @@ PPDB GetPDB(DWORD PID)
     // Pointer to PDB (Process Database)
     if (PID == -1) // Local process
     {
-        __asm mov eax, fs:[0x30]
-        __asm mov pPDB, eax
+        __asm__ (
+            "mov %%fs:0x30, %0\n\t"
+        : "=r"(pPDB)
+        );
     }
     else
         pPDB = (PPDB)(PID ^ dwObsfucator);
@@ -137,12 +146,13 @@ PPDB GetPDB(DWORD PID)
 DWORD GetObsfucator()
 {
     DWORD PID, PDB;
-
     PID = GetCurrentProcessId();
 
-    __asm mov eax,fs:[0x30];  // PDB
-    __asm mov PDB,eax
 
+    __asm__ (
+        "mov %%fs:0x30, %0\n\t"
+    : "=r"(PDB)
+    );
     return PDB ^ PID;
 }
 
@@ -324,13 +334,20 @@ HANDLE OpenThread9x(DWORD dwDesiredAccess,
         return NULL;
 
     // InternalOpenThread()
-    __asm mov  eax, pTDB;
-    __asm push dwThreadId;
-    __asm push bInheritHandle;
-    __asm push dwDesiredAccess;
-    __asm call InternalOpenThread;
-    __asm mov  hThread, eax;
-
+    __asm__(
+        "mov %[tdb], %%eax\n\t"
+        "push %[tid]\n\t"
+        "push %[inherit]\n\t"
+        "push %[access]\n\t"
+        "call %[openThread]\n\t"
+        "mov %%eax, %[hThread]"
+    : [hThread] "=r"(hThread)
+    : [tdb] "r"(pTDB),
+      [tid] "r"(dwThreadId),
+      [inherit] "r"(bInheritHandle),
+      [access] "r"(InternalOpenThread),
+      [openThread] "r"(InternalOpenThread)
+    );
     return hThread;
 }
 
@@ -1101,14 +1118,14 @@ BOOL Initialization()
         return FALSE;
     bInitializing = TRUE;
 
-    __try
+    __seh_try
     {
-        __try
+        __seh_try
         {
             // Get Windows version
             osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
             if (!GetVersionEx(&osvi))
-                __leave;
+                __seh_leave;
 
             // Save version data in global variables
             OSMajorVersion = osvi.dwMajorVersion;
@@ -1130,26 +1147,26 @@ BOOL Initialization()
                 dwObsfucator = GetObsfucator();
 
                 if (!(hKernel32 = LoadLibrary(TEXT("Kernel32.dll"))))
-                    __leave;
+                    __seh_leave;
 
                 // Get Kernel32 IsThreadId() address
                 // (cannot use GetProcAddress() because it doesn't allow to retreive Kernel32 functions addresses by ordinal in Win9x)
                 if (!(IsThreadId = (ISTHREADID)_GetProcAddress(hKernel32, ISTHREADID_ORDINAL)))
-                    __leave;
+                    __seh_leave;
 
                 // Get GetpWin16Lock(), EnterSysLevel() and LeaveSysLevel() functions addresses
                 if (!(GetpWin16Lock = (GETPWIN16LOCK)_GetProcAddress(hKernel32, GETPWIN16LOCK_ORDINAL)))
-                    __leave;
+                    __seh_leave;
                 if (!(EnterSysLevel = (ENTERSYSLEVEL)_GetProcAddress(hKernel32, ENTERSYSLEVEL_ORDINAL)))
-                    __leave;
+                    __seh_leave;
                 if (!(LeaveSysLevel = (LEAVESYSLEVEL)_GetProcAddress(hKernel32, LEAVESYSLEVEL_ORDINAL)))
-                    __leave;
+                    __seh_leave;
 
                 // Get Win16Mutex
                 Win16Mutex = 0;
                 GetpWin16Lock(&Win16Mutex);
                 if (Win16Mutex == 0)
-                    __leave;
+                    __seh_leave;
 
                 /*** Get Krn32Mutex from Kernel32.dll ***/
                 Krn32Mutex = 0;
@@ -1200,7 +1217,7 @@ BOOL Initialization()
                 // Search for MOV ECX,0 (B9,00,00,00,00) inside OpenProcess() function
                 p = MemSearch(pOpenProcess, OpenProcessLength, "\xB9\x00\x00\x00\x00", 5);
                 if (!p)
-                    __leave;
+                    __seh_leave;
 
                 // Address of InternalOpenThread()
                 InternalOpenThread = (INTERNALOPENTHREAD)p;
@@ -1220,7 +1237,7 @@ BOOL Initialization()
                 // Search for PUSH FFFFF000 (68,00,F0,FF,FF) inside DebugActiveProcess() function
                 p = MemSearch(pDebugActiveProcess, DebugActiveProcessLength, "\x68\x00\xF0\xFF\xFF", 5);
                 if (!p || p[6] != 0xE8) // CALL InternalCreateRemoteThread (E8,xx,xx,xx,xx)
-                    __leave;
+                    __seh_leave;
                 p += 7; // Point to CALL InternalCreateRemoteThread
                 // Address of InternalCreateRemoteThread() inside DebugActiveProcess()
                 InternalCreateRemoteThread = (INTERNALCREATEREMOTETHREAD)(p + *(DWORD *)p + 4);
@@ -1255,7 +1272,7 @@ BOOL Initialization()
 
                 // Krn32Mutex not found !
                 if (nLocks >= 2 && Krn32Mutex == 0)
-                    __leave;
+                    __seh_leave;
 
                 // Only EnterSysLevel(Win16Mutex) called
                 if (nLocks <= 1)
@@ -1275,7 +1292,7 @@ BOOL Initialization()
                 // Search for MOV ECX,[addr] (8B,0D,...) inside GDIReallyCares() function
                 p = MemSearch(pGDIReallyCares, GDIReallyCaresLength, "\x8B\x0D", 2);
                 if (!p)
-                    __leave;
+                    __seh_leave;
                 p += 2;
                 // Address of pMTEModTable
                 pMTEModTable = (IMTE **)*(DWORD *)*(DWORD *)p;
@@ -1284,7 +1301,7 @@ BOOL Initialization()
                 if (OSWinMe)
                 {
                     if (!(K32_OpenThread = (OPENTHREAD)GetProcAddress(hKernel32, "OpenThread")))
-                        __leave;
+                        __seh_leave;
                 }
             }//Win9x
 
@@ -1292,79 +1309,79 @@ BOOL Initialization()
             if (OSWinNT)
             {
                 if (!(hKernel32 = LoadLibrary(TEXT("Kernel32.dll"))))
-                    __leave;
+                    __seh_leave;
 
                 if (!(hNTDLL = LoadLibrary(TEXT("NTDLL.DLL"))))
-                    __leave;
+                    __seh_leave;
 
                 // Win NT all versions
                 if (!(K32_CreateRemoteThread = (CREATEREMOTETHREAD)GetProcAddress(hKernel32, "CreateRemoteThread")))
-                    __leave;
+                    __seh_leave;
                 if (!(RtlCreateUserThread = (RTLCREATEUSERTHREAD)GetProcAddress(hNTDLL, "RtlCreateUserThread")))
-                __leave;
+                __seh_leave;
                 if (!(NtQueueApcThread = (NTQUEUEAPCTHREAD)GetProcAddress(hNTDLL, "NtQueueApcThread")))
-                    __leave;
+                    __seh_leave;
                 if (!(LdrShutdownThread = (LDRSHUTDOWNTHREAD)GetProcAddress(hNTDLL, "LdrShutdownThread")))
-                    __leave;
+                    __seh_leave;
                 if (!(NtTerminateThread = (NTTERMINATETHREAD)GetProcAddress(hNTDLL, "NtTerminateThread")))
-                    __leave;
+                    __seh_leave;
                 if (!(NtAllocateVirtualMemory = (NTALLOCATEVIRTUALMEMORY)GetProcAddress(hNTDLL, "NtAllocateVirtualMemory")))
-                    __leave;
+                    __seh_leave;
                 if (!(NtFreeVirtualMemory = (NTFREEVIRTUALMEMORY)GetProcAddress(hNTDLL, "NtFreeVirtualMemory")))
-                    __leave;
+                    __seh_leave;
                 if (!(NtOpenThread = (NTOPENTHREAD)GetProcAddress(hNTDLL, "NtOpenThread")))
-                    __leave;
+                    __seh_leave;
                 if (!(RtlNtStatusToDosError = (RTLNTSTATUSTODOSERROR)GetProcAddress(hNTDLL, "RtlNtStatusToDosError")))
-                    __leave;
+                    __seh_leave;
                 if (!(NtQuerySystemInformation = (NTQUERYSYSTEMINFORMATION)GetProcAddress(hNTDLL, "NtQuerySystemInformation")))
-                    __leave;
+                    __seh_leave;
                 if (!(NtQueryInformationProcess = (NTQUERYINFORMATIONPROCESS)GetProcAddress(hNTDLL, "NtQueryInformationProcess")))
-                    __leave;
+                    __seh_leave;
                 if (!(NtQueryInformationThread = (NTQUERYINFORMATIONTHREAD)GetProcAddress(hNTDLL, "NtQueryInformationThread")))
-                    __leave;
+                    __seh_leave;
 
                 // Win NT 4.0 or later
                 if (OSMajorVersion >= 4)
                 {
                     if (!(K32_VirtualAllocEx = (VIRTUALALLOCEX)GetProcAddress(hKernel32, "VirtualAllocEx")))
-                        __leave;
+                        __seh_leave;
                     if (!(K32_VirtualFreeEx = (VIRTUALFREEEX)GetProcAddress(hKernel32, "VirtualFreeEx")))
-                        __leave;
+                        __seh_leave;
                 }
 
                 // Win 2000 or later
                 if (OSMajorVersion >= 5)
                 {
                     if (!(K32_OpenThread = (OPENTHREAD)GetProcAddress(hKernel32, "OpenThread")))
-                        __leave;
+                        __seh_leave;
                     if (!(K32_CreateToolhelp32Snapshot = (CREATETOOLHELP32SNAPSHOT)GetProcAddress(hKernel32, "CreateToolhelp32Snapshot")))
-                        __leave;
+                        __seh_leave;
                     if (!(K32_Thread32First = (THREAD32FIRST)GetProcAddress(hKernel32, "Thread32First")))
-                        __leave;
+                        __seh_leave;
                     if (!(K32_Thread32Next = (THREAD32NEXT)GetProcAddress(hKernel32, "Thread32Next")))
-                        __leave;
+                        __seh_leave;
                 }
 
                 // Win 2003 or later
                 if ((OSMajorVersion == 5 && OSMinorVersion >= 2) || OSMajorVersion == 6)
                 {
                     if (!(K32_GetProcessId = (GETPROCESSID)GetProcAddress(hKernel32, "GetProcessId")))
-                        __leave;
+                        __seh_leave;
                     if (!(K32_GetThreadId = (GETTHREADID)GetProcAddress(hKernel32, "GetThreadId")))
-                        __leave;
+                        __seh_leave;
                 }
 
                 // Win Vista or later
                 if (OSMajorVersion == 6)
                 {
                 if (!(NtCreateThreadEx = (NTCREATETHREADEX)GetProcAddress(hNTDLL, "NtCreateThreadEx")))
-                    __leave;
+                    __seh_leave;
                 }
             }//WinNT
 
             Result = TRUE;
         }
-        __finally
+        __seh_finally
         {
             if (hKernel32)
                 FreeLibrary(hKernel32);
@@ -1373,11 +1390,13 @@ BOOL Initialization()
 
             bInitializing = FALSE;
         }
+        __seh_end_finally
     }
-    __except(EXCEPTION_EXECUTE_HANDLER)
+    __seh_except(EXCEPTION_EXECUTE_HANDLER)
     {
         Result = FALSE;
     }
+    __seh_end_except
 
     return Result;
 }
