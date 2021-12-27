@@ -1,0 +1,533 @@
+<HTML>
+<HEAD>
+<TITLE>Injection Library</TITLE>
+
+<STYLE>
+BODY, P, TD {font-family: Verdana, Arial, Helvetica, sans-serif; font-size: 10pt}
+H2,H3,H4,H5 {color: #ff9900; font-weight: bold;}
+H2 {font-size: 13pt;}
+H3 {font-size: 12pt;}
+H4 {font-size: 10pt; color: black;}
+PRE {BACKGROUND-COLOR: #FBEDBB; FONT-FAMILY: "Courier New", Courier, mono; WHITE-SPACE: pre;}
+CODE {COLOR: #990000; FONT-FAMILY: "Courier New", Courier, mono;}
+</STYLE>
+</HEAD>
+<BODY bgcolor="#FFFFFF" color=#000000>
+
+<H1>Injection Library</H1>
+<B>by <A HREF="mailto:afeijao@portugalmail.com">António Feijão</A></B>
+<P><B>Library that implements remote code injection for all Windows versions.</B></P>
+
+<H2>Introduction</H2>
+
+<P>After publishing my last article (<A HREF="#2">[2]</A>) explaining how to emulate some missing 
+Windows functions used for remote code execution, the next logical step was to use these functions 
+as a framework for implementing a library that allows easy remote code injection. Remote code 
+injection is the method that permits executing code within the address space of a process other 
+that the current one. Because the architecture of Windows isolates each process to protect them 
+against memory overwrites and other bugs in applications injecting code into a remote process is 
+not straightforward. This library implements functions that allow direct remote code injection, 
+DLL remote injection and remote subclassing for Win32 processes (GUI and CUI) and NT native processes. 
+Don't expect to find any innovative code as this library is mainly based on the techniques described 
+by Robert Kuster in his article "Three ways to inject your code into another process" (<A HREF="#1">[1]</A>). 
+Nevertheless I hope that you'll find the library useful and use it on your projects.</P>
+
+
+<H2>Remote SEH (Structured Exception Handling)</H2>
+<P>All the remote code execution is protected by SEH to avoid any exception to crash the remote process. 
+The SEH code you normally find in a C/C++ application looks like the following:</P>
+<PRE>
+__try 
+{
+    // try code
+}
+__except(filter-expression)
+{
+    // except code
+}
+</PRE>
+<P>You cannot use this code in remote code because this is the compiler implementation of SEH and 
+internally it calls standard library functions (<CODE>__except_handler3</CODE>) that reside on the current 
+process. You need to use system-level SEH (<A HREF="#6">[6]</A>). System-level SEH is implemented as per-thread 
+linked list of callback exception handler functions. A pointer to the beginning of this list can be 
+retrieved from the first dword of the <CODE>TIB</CODE> (Thread Information Block). The <CODE>FS</CODE> 
+segment register always point to the current <CODE>TIB</CODE>. To implement SEH all that is needed 
+is to add an exception handler to the linked list. In the simplest form this can be accomplished 
+with the following code:</P>
+<PRE>
+push addr _exception_handler  ; Addr. of our exception handler
+push dword ptr fs:[0]         ; Addr. of previous handler
+mov  fs:[0], esp              ; Add it to the list
+
+; try code goes here
+
+pop  dword ptr fs:[0]         ; Remove our handler
+add  esp, 4                   ; Clean up stack
+</PRE>
+<P>Every time an exception in the <CODE>try</CODE> code block occurs the operating system calls 
+the <CODE>_exception_handler</CODE> routine. I said that in the simplest form only two dwords 
+(that makes an <CODE>EXCEPTION_REGISTRATION</CODE> structure) must be pushed on stack. Of course 
+nothing prevents us from adding additional data fields to this structure (VC for example pushes 
+an extended <CODE>EXCEPTION_REGISTRATION</CODE> structure containing five fields). In my 
+implementation I'm adding two fields to the standard SEH frame: the value of the <CODE>EBP</CODE> 
+register and the address where the execution should resume after the exception occurred. The final 
+code will look like this (You'll notice that the code is written in assembly. I used assembly for 
+two reasons: assembly permits a greater control of the generated code and only in assembly is 
+possible to access the <CODE>FS</CODE> register):</P>
+<PRE>
+; Set a new SEH frame
+push ebp                         ; EBP at safe-place (needed for ENTER/LEAVE)
+push addr _resume_at_safe_place  ; Addr. of safe-place
+push addr _exception_handler     ; Addr. of our exception handler
+push dword ptr fs:[0]            ; Addr. of previous handler
+mov  fs:[0], esp                 ; Install new SEH handler
+
+; ... try code ...
+
+_resume_at_safe_place:
+; Remove SEH frame
+pop dword ptr fs:[0]             ; Remove SEH handler
+add esp, 3*4                     ; Remove additional data from stack
+</PRE>
+<PRE>
+EXCEPTION_DISPOSITION __cdecl _exception_handler(
+         struct _EXCEPTION_RECORD                 *ExceptionRecord,
+         struct _EXTENDED_EXCEPTION_REGISTRATION  *EstablisherFrame,
+         struct _CONTEXT                          *ContextRecord,
+         void                                     *DispatcherContext)
+{
+    ContextRecord->cx_Eax = ExceptionRecord->ExceptionCode;
+    ContextRecord->cx_Eip = EstablisherFrame->SafeExit;
+    ContextRecord->cx_Ebp = EstablisherFrame->SafeEBP;
+    ContextRecord->cx_Esp = EstablisherFrame;
+
+    return ExceptionContinueExecution;
+}
+</PRE>
+<P>The <CODE>_exception_handler</CODE> restores the <CODE>EBP</CODE> register, set the <CODE>EAX</CODE> 
+register to the exception code and resumes execution at <CODE>_resume_at_safe_place</CODE>. The 
+complete source code can be found on file "Stub.asm".</P>
+
+
+<H2>GetProcessInfo()</H2>
+<P>The <CODE>GetProcessInfo()</CODE> function returns valuable information about a process 
+needed to decide what type of injection can be performed in this process. The following 
+information is returned:</P>
+<UL>
+<LI>OS family: Win9x (95, 98, Me) or WinNT (3, 4, 2000, XP, Vista, 7)
+<LI>Process is invalid: DOS, 16-bit, system, other
+<LI>Process is being debugged
+<LI>Process has not yet finished its initialization
+<LI>Protected process
+</UL>
+
+<H3>OS family</H3>
+<P>This information is necessary because the injection algorithms are different for the Windows 9x 
+(95, 98, Me) and NT (3, 4, 2000, XP, Vista, 7) families. The information is returned directly 
+by a call to <CODE>GetVersionEx()</CODE>:</P>
+<PRE>
+OSVERSIONINFO osvi;
+osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+GetVersionEx(&osvi);
+
+fWin9x = (osvi.dwPlatformId == VER_PLATFORM_WIN32_WINDOWS);
+fWinNT = (osvi.dwPlatformId == VER_PLATFORM_WIN32_NT);
+</PRE>
+
+<H3>Invalid process</H3>
+<H4>NT</H4>
+<P>A NT process is considered invalid if its exit code is not equal to 259 (hex 0x103) or doesn't 
+have a <CODE>PEB</CODE> (Process Environment Block) (i.e. a system process).</P>
+<PRE>
+PROCESS_BASIC_INFORMATION pbi;
+NtQueryInformationProcess(hProcess,
+                          ProcessBasicInformation,
+                          &pbi,
+                          sizeof(pbi),
+                          NULL);
+
+fINVALID = ((pbi.ExitStatus != 0x103) || (pbi.PebBaseAddress == NULL));
+</PRE>
+<H4>9x</H4>
+<P>A Win9x process is invalid if its exit code is not 259 (hex 0x103) or is a DOS, 16-bit or 
+it's in a termination state.</P>
+<PRE>
+#define fINVALIDPROCFLAGS (fTerminated | fTerminating | fNearlyTerminating | fDosProcess | fWin16Process)
+PDB *pPDB = GetPDB(dwPID);
+
+fINVALID = ((pPDB->TerminationStatus != 0x103) || (pPDB->Flags & fINVALIDPROCFLAGS));
+</PRE>
+
+<H3>Process is being debugged</H3>
+<H4>NT</H4>
+<P>If either the <CODE>ProcessDebugPort</CODE> or the <CODE>PEB</CODE> <CODE>BeingDebugged</CODE> 
+field are non-zero then the NT process is being debugged.</P>
+<PRE>
+PROCESS_BASIC_INFORMATION pbi;
+BOOL                      DebugPort;
+PEB_NT                    PEB, *pPEB;
+
+NtQueryInformationProcess(hProcess,
+                          ProcessDebugPort,
+                          &DebugPort,
+                          sizeof(DebugPort),
+                          NULL);
+
+NtQueryInformationProcess(hProcess,
+                          ProcessBasicInformation,
+                          &pbi,
+                          sizeof(pbi),
+                          NULL);
+
+pPEB = pbi.PebBaseAddress;
+ReadProcessMemory(hProcess, pPEB, &PEB, sizeof(PEB), NULL);
+
+fDEBUGGED = DebugPort || PEB.BeingDebugged;
+</PRE>
+<H4>9x</H4>
+<P>If the <CODE>PDB</CODE> (Process Database) <CODE>Debug Context</CODE> pointer is non <CODE>NULL</CODE> 
+or the <CODE>fDebugSingle</CODE> bit of the <CODE>PDB flags</CODE> is set then the Win9x process is 
+being debugged.</P>
+<PRE>
+PDB *pPDB = GetPDB(dwPID);
+
+fDEBUGGED =  ((pPDB->DebuggeeCB != NULL) || (pPDB->Flags & fDebugSingle));
+</PRE>
+
+<H3>Process is not initialized</H3>
+<H4>NT</H4>
+<P>If the <CODE>LdrData</CODE> or <CODE>LoaderLock</CODE> fields of the <CODE>PEB</CODE> are <CODE>NULL</CODE> 
+then the NT process is not initialized. Both fields are set by the NT loader user-mode APC routine 
+<CODE>LdrpInitialize()</CODE> while initializing the process.</P>
+<PRE>
+fNOTINITIALIZED = (PEB.LdrData == NULL || PEB.LoaderLock == NULL);
+</PRE>
+<H4>9x</H4>
+<P>Only if the last DWORD of the main thread stack is below 2GB (0x80000000) the Win9x process is 
+initialized (<A HREF="#3">[3]</A>).</P>
+<PRE>
+PDB *pPDB = GetPDB(dwPID);
+DWORD *pThreadHead = pPDB->ThreadList;
+THREADLIST *pThreadNode = *pThreadHead;
+TDB *pTDB = pThreadNode->pTDB;
+void *pvStackUserTop = pTDB->tib.pvStackUserTop;
+pvStackUserTop = (DWORD *)((DWORD)pvStackUserTop - sizeof(DWORD));
+DWORD StackUserTopContents;
+ReadProcessMemory(hProcess, pvStackUserTop, &StackUserTopContents, sizeof(StackUserTopContents), NULL);
+
+fNOTINITIALIZED = ((int)StackUserTopContents < 0);
+</PRE>
+
+<H3>Protected process</H3>
+
+<P>Starting with Windows Vista a new type of process, called a protected process, is introduced.
+In a protected process the following operations cannot be performed: inject a thread, access the virtual memory,
+debug the process, duplicate a handle or change the quota or working set. Therefore remote injection it's not
+possible in protected processes. Use the following code to detect a protected process:</P>
+<PRE>
+HANDLE                             hProcess;
+PROCESS_EXTENDED_BASIC_INFORMATION ExtendedBasicInformation;
+	
+// Get process handle (note the PROCESS_QUERY_LIMITED_INFORMATION access !)
+hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, dwPID);
+
+// Get process Extended Basic Info
+ExtendedBasicInformation.Size = sizeof(PROCESS_EXTENDED_BASIC_INFORMATION);
+NtQueryInformationProcess(hProcess,
+                          ProcessBasicInformation,
+                          &ExtendedBasicInformation,
+                          sizeof(ExtendedBasicInformation),
+                          NULL);
+
+fPROTECTED = ExtendedBasicInformation.IsProtectedProcess;
+</PRE>
+
+<H3>Subsystem</H3>
+<P>This is the type of subsystem the process uses for its user interface. It's the same as the 
+<CODE>Subsystem</CODE> field found in the <CODE>PE Header</CODE> of the file on disk (and of 
+the <CODE>Module Header</CODE> in memory).</P>
+<H4>NT</H4>
+<P>In NT the subsystem type can be directly retrieved from the <CODE>PEB</CODE> <CODE>ImageSubsystem</CODE> 
+field:</P>
+<PRE>
+Subsystem = PEB.ImageSubsystem;
+</PRE>
+<H4>9x</H4>
+<P>The subsystem type can be retrieved from the module's header <CODE>Subsystem</CODE> field. To locate the 
+module's header in memory we can use the Kernel32 <CODE>GetModuleHandle()</CODE> function or the <CODE>MTEModTable</CODE>. 
+The pointer to the NT header is obtained from the <CODE>pNTHdr</CODE> field of the <CODE>IMTE</CODE> (Internal 
+Module Table Entry). The <CODE>IMTE</CODE> address is obtained from the <CODE>MTEModTable</CODE> using the 
+<CODE>PDB</CODE> <CODE>MTEIndex</CODE> field as an index (<A HREF="#4">[4]</A> chapter 3 details 
+all these structures and explains the hack needed to obtain the address of the <CODE>MTEModTable</CODE> 
+from the Kernel32 <CODE>GDIReallyCares()</CODE> function).</P>
+<PRE>
+#define GDIREALLYCARES_ORDINAL 23	// 0x17
+
+HMODULE hKernel32 = GetModuleHandle("Kernel32.dll");
+void *pGDIReallyCares = _GetProcAddress(hKernel32, GDIREALLYCARES_ORDINAL);
+int GDIReallyCaresLength = GetProcLength(hKernel32, GDIREALLYCARES_ORDINAL);
+
+// Search for MOV ECX,[addr] (8B,0D,...) inside GDIReallyCares() function
+BYTE *p = MemSearch(pGDIReallyCares, GDIReallyCaresLength, "\x8B\x0D", 2);
+IMTE **pMTEModTable = (IMTE **)*(DWORD *)*(DWORD *)(p+2);
+
+PDB *pPDB = GetPDB(dwPID);
+IMTE *pIMTE = pMTEModTable[pPDB->MTEIndex];
+PIMAGE_NT_HEADERS32 pNTHeader = pIMTE->pNTHdr;
+
+Subsystem = pNTHeader->OptionalHeader.Subsystem;
+</PRE>
+
+<H2>RemoteExecute()</H2>
+<P>The <CODE>RemoteExecute()</CODE> function executes code in the context of a remote process. It accepts 
+7 parameters:</P>
+<UL>
+<LI><CODE>hProcess</CODE>: Handle of the remote process.
+<LI><CODE>ProcessFlags</CODE>: Returned by <CODE>GetProcessInfo()</CODE>. Can be zero.
+<LI><CODE>Function</CODE>: Thread function that will be executed within the remote process context. The 
+thread function is protected against exceptions by SEH.
+<LI><CODE>pData</CODE>: Memory block that will be copied to the remote process address space. Can be 
+<CODE>NULL</CODE>.
+<LI><CODE>Size</CODE>: Size of <CODE>pData</CODE> block. If zero is specified <CODE>pData</CODE> is 
+treated as a DWORD.
+<LI><CODE>dwTimeout</CODE>: Timeout in milliseconds used in wait functions. Can be <CODE>INFINITE</CODE>.
+<LI><CODE>ExitCode</CODE>: Pointer to a DWORD that will receive the remote code exit status.
+</UL>
+<P>The following steps are executed by <CODE>RemoteExecute()</CODE> (see <A HREF="#1">[1]</A>):</P>
+<UL>
+<LI>If <CODE>ProcessFlags</CODE> is zero then call <CODE>GetProcessInfo()</CODE>.
+<LI>Check if the function code is safe to be relocated (no calls or absolute addressing) and calculate 
+its length. Note that this is not 100% secure ! You should write relocatable code and analyze the 
+generated code.
+<LI>Allocate a remote memory block and copy the function code to it.
+<LI>If a data block is specified allocate a remote memory block and copy the data to it.
+<LI>Allocate a remote memory block and copy the stub code to it (see file "Stub.asm"). The stub code 
+will set an SEH frame and call the user thread function. The special native process exit it's also 
+handled by this code.
+<LI>According to the <CODE>ProcessFlags</CODE> it will run the remote code using one of the available methods: 
+<CODE>CreateRemoteThread()</CODE>, <CODE>RtlCreateUserThread()</CODE> or <CODE>NtQueueApcThread()</CODE>.
+<LI>Wait for remote code to finish using <CODE>WaitForSingleObject(hThread)</CODE> or checking the
+<CODE>Finished</CODE> flag set by the stub code.
+<LI>If a data block was specified, read back the data from the remote memory block.
+<LI>Cleanup and return error code.
+</UL>
+<P>Depending on the <CODE>ProcessFlags</CODE> a different remote code execution method must be used:</P>
+
+<H3>Win32 initialized process</H3>
+<P>Use the <CODE>CreateRemoteThread()</CODE> function to execute the remote code (because this function 
+doesn't exist in Win9x it must be emulated (see <A HREF="#2">[2]</A>)). Starting with Windows Vista
+<CODE>CreateRemoteThread()</CODE> will fail if the target process is in a different session than the calling process.
+The solution to this limitation is to use the undocumented <CODE>NtCreateThreadEx()</CODE> function on Windows Vista and 7 (<A HREF="#8">[8]</A>).
+Wait for the remote code to finish  by calling <CODE>WaitForSingleObject()</CODE> on the returned thread handle, 
+and get the remote exit code by calling <CODE>GetExitCodeThread()</CODE>.</P>
+
+<H3>Win32 not initialized process</H3>
+<P>What you can do in a non-initialized process is very limited (because you cannot assume that the system internal 
+structures are initialized, the DLLs are loaded, ...) therefore you should be extremely careful while injecting 
+code into this type of process. It's advised to wait until the process finishes its initialization. For GUI 
+processes this can be acomplished by using the <CODE>WaitForInputIdle()</CODE> function, but unfortunately there's no 
+equivalent function for the other types of processes. Other possible technique involves setting a breakpoint 
+into the process entry point (this allows to detect when the system part of the process initialization has 
+terminated).</P>
+
+<H4>9x</H4>
+<P>Just set a bit in the <CODE>CreateRemoteThread()</CODE> <CODE>dwCreationFlags</CODE> parameter that causes 
+this function internally to prevent that <CODE>THREAD_ATTACH</CODE> message will be send before <CODE>PROCESS_ATTACH</CODE> 
+(see <A HREF="#3">[3]</A>).</P>
+<H4>NT</H4>
+<P>The <CODE>NtQueueApcThread()</CODE> function is used to queue an APC routine (our remote code) on an existing 
+remote thread. The APC routine will run as soon as the thread becomes signaled. We cannot use wait functions on 
+a thread for which the APC was queued and therefore to get the remote code exit status we poll the <CODE>Finished</CODE>
+flag set by the remote stub code. We cannot also use <CODE>GetExitCodeThread()</CODE> to get the remote exit code 
+(this will return the "hijacked" thread exit status) so we always set the exit code to zero (of course we could 
+save the exit status in a variable and read it later as we do with the <CODE>Finished</CODE> flag).</P>
+
+<H3>NT native process</H3>
+<P>To create an NT native process the <CODE>RtlCreateUserThread()</CODE> function is used. The <CODE>WaitForSingleObject()</CODE> 
+and <CODE>GetExitCodeThread()</CODE> can be used on the returned thread handle. Note that the native remote code 
+requires a different exit code. This is handled by the remote stub code. The code used for the native exit is 
+the Kernel32 <CODE>ExitThread()</CODE> equivalent but for native processes:</P>
+<UL>
+<LI>Call <CODE>LdrShutdownThread()</CODE> to notify all DLL's on thread exit.
+<LI>Release the thread stack by calling <CODE>NtFreeVirtualMemory()</CODE>. Note that before releasing the stack we 
+must switch to a temporary stack. The <CODE>UserReserved</CODE> area within the <CODE>TEB</CODE> is used for this purpose.
+<LI>Terminate the thread by calling <CODE>NtTerminateThread()</CODE>.
+</UL>
+
+
+<H2>InjectDll()</H2>
+<P>The InjectDll() function loads a DLL into the address space of a remote process. It accepts 5 parameters:</P>
+<UL>
+<LI><CODE>hProcess</CODE>: Handle of the remote process.
+<LI><CODE>ProcessFlags</CODE>: Returned by <CODE>GetProcessInfo()</CODE>. Can be zero.
+<LI><CODE>szDllPath</CODE>: Path of the DLL to load. Ansi/Unicode strings can be passed to 
+<CODE>InjectDllA()</CODE>/<CODE>InjectDllW()</CODE>.
+<LI><CODE>dwTimeout</CODE>: Timeout in milliseconds used in wait functions. Can be <CODE>INFINITE</CODE>.
+<LI><CODE>hRemoteDll</CODE>: Pointer to an <CODE>HINSTANCE</CODE> variable that will receive the 
+loaded DLL handle.
+</UL>
+<P><CODE>InjectDll()</CODE> just initializes the data block needed by the remote code and use <CODE>RemoteExecute()</CODE> 
+to remote execute the function <CODE>RemoteInjectDll()</CODE>.</P>
+<PRE>
+DWORD WINAPI RemoteInjectDll(RDATADLL *pData)
+{
+    return (pData->hRemoteDll = pData->LoadLibrary(pData->szDll));
+}
+</PRE>
+<P><CODE>RemoteInjectDll()</CODE> will run in the address space of the remote process and calls 
+<CODE>LoadLibrary()</CODE> to load the specified DLL within the address space of the remote process. 
+The handle of the loaded DLL is returned.</P>
+
+
+<H2>EjectDll()</H2>
+<P>The <CODE>EjectDll()</CODE> function unloads a DLL from the address space of a remote process. 
+It accepts 5 parameters:</P>
+<UL>
+<LI><CODE>hProcess</CODE>: Handle of the remote process.
+<LI><CODE>ProcessFlags</CODE>: Returned by <CODE>GetProcessInfo()</CODE>. Can be zero.
+<LI><CODE>szDllPath</CODE>: Path of the DLL to unload. Ansi/Unicode strings can be passed to 
+<CODE>EjectDllA()</CODE>/<CODE>EjectDllW()</CODE>. Can be <CODE>NULL</CODE>.
+<LI><CODE>hRemoteDll</CODE>: If <CODE>szDllPath</CODE> is <CODE>NULL</CODE> the <CODE>hRemoteDll</CODE> parameter 
+is used as the DLL handle.
+<LI><CODE>dwTimeout</CODE>: Timeout in milliseconds used in wait functions. Can be <CODE>INFINITE</CODE>.
+</UL>
+<P><CODE>EjectDll()</CODE> initializes the data block needed by the remote function and use 
+<CODE>RemoteExecute()</CODE> to remote execute the function <CODE>RemoteEjectDll()</CODE>.</P>
+<PRE>
+DWORD WINAPI RemoteEjectDll(RDATADLL *pData)
+{
+    if (pData->szDll[0] != '\0')
+        pData->hRemoteDll = pData->GetModuleHandle(pData->szDll);
+
+    do {
+        pData->Result = pData->FreeLibrary(pData->hRemoteDll);
+    } while (pData->Result);
+
+    return 0;
+}
+</PRE>
+<P><CODE>RemoteEjectDll()</CODE> will run in the address space of the remote process and calls 
+<CODE>FreeLibrary()</CODE> to unload the specified DLL. <CODE>FreeLibrary()</CODE> is called the 
+number of times necessary to decrease the reference count to zero. If the DLL name is specified 
+<CODE>GetModuleHandle()</CODE> is used to retrieve the handle of the DLL needed by <CODE>FreeLibrary()</CODE>.</P>
+
+
+<H2>StartRemoteSubclass()</H2>
+<P>The <CODE>StartRemoteSubclass()</CODE> function subclasses a remote window (i.e. changes a remote 
+process window procedure). It accepts 2 parameters:</P>
+<UL>
+<LI><CODE>rd</CODE>: Pointer to a <CODE>RDATA</CODE> structure defined as:
+<PRE>
+typedef struct _RDATA {
+        int             Size;              // Size of structure
+        HANDLE          hProcess;          // Process handle
+        DWORD           ProcessFlags;      // Process flags
+        DWORD           dwTimeout;         // Timeout
+        HWND            hWnd;              // Window handle
+        struct _RDATA   *pRDATA;           // Pointer to RDATA structure
+        WNDPROC         pfnStubWndProc;    // Address of stub window handler
+        USERWNDPROC     pfnUserWndProc;    // Address of user's window procedure handler
+        WNDPROC         pfnOldWndProc;     // Address of old window handler
+        LRESULT         Result;            // Result from user's window procedure handler
+        SETWINDOWLONG   pfnSetWindowLong;  // Address of SetWindowLong()
+        CALLWINDOWPROC  pfnCallWindowProc; // Address of CallWindowProc()
+} RDATA;</PRE>
+If you need to pass extra data to the new window procedure handler, it must be appended to the existing 
+<CODE>RDATA</CODE>. Before calling <CODE>StartRemoteSubclass()</CODE>, the following fields of the 
+<CODE>RDATA</CODE> structure must be initialized: <CODE>Size</CODE> must contain the size of the 
+<CODE>RDATA</CODE> structure plus any appended data, <CODE>hProcess</CODE> must contain the handle of the 
+remote process, and <CODE>hWnd</CODE> must contain the handle of the window to be subclassed. The extra 
+fields of the appended data should also be initialized at this point. All the remaining fields should 
+be considered private and not used.
+
+<LI><CODE>WndProc</CODE>: User window procedure that will handle the subclassed window messages. 
+It's defined as:
+<PRE>
+typedef LRESULT (WINAPI* USERWNDPROC)(RDATA *, HWND, UINT, WPARAM, LPARAM);
+</PRE>
+Except for the first parameter (a pointer to the <CODE>RDATA</CODE> structure) the remaining parameters 
+are the normal window handle, message type, <CODE>wParam</CODE> and <CODE>lParam</CODE> found in any window 
+procedure handler. 
+The new window procedure handler will be called by Windows every time a message to the window must be 
+processed, therefore the function should be coded as a "normal" window procedure handler (with the 
+<CODE>switch(Msg)</CODE> loop). Please note that because this function will be executed on a remote process, it 
+must follow the same rules as any remote code execution. Any unhandled message should be processed 
+by the default window procedure handler. For this, the function must return <CODE>FALSE</CODE>. If you want to 
+process yourself some messages, return the value in the <CODE>Result</CODE> field of the <CODE>RDATA</CODE> 
+structure and return <CODE>TRUE</CODE> for the function.
+This function is protected from exceptions by a remote SEH frame.
+</UL>
+
+<P><CODE>StartRemoteSubclass()</CODE> initializes the remaining <CODE>RDATA</CODE> fields and 
+uses <CODE>RemoteExecute()</CODE> to remote execute the function <CODE>RemoteStartSubclass()</CODE>:</P>
+<PRE>
+DWORD WINAPI RemoteStartSubclass(RDATA *pData)
+{
+    return (pData->pfnOldWndProc = pData->pfnSetWindowLong(pData->hWnd, 
+                                                           GWL_WNDPROC,
+                                                           pData->pfnStubWndProc));
+}
+</PRE>
+
+<P><CODE>RemoteStartSubclass()</CODE> will run in the address space of the remote process and 
+calls <CODE>SetWindowLong()</CODE> with parameter <CODE>GWL_WNDPROC</CODE> to change the window 
+procedure handler to a new window handler. This handler will be called by Windows every time a 
+message to the window must be processed. The new window procedure handler (<CODE>StubWndProc()</CODE> 
+of file "Stub.asm") sets an SEH frame and calls <CODE>UserWndProc()</CODE>. If <CODE>UserWndProc()</CODE> 
+returns <CODE>FALSE</CODE> a call to <CODE>CallWindowProc()</CODE> allow the original window procedure 
+to handle the message.</P>
+
+
+<H2>StopRemoteSubclass()</H2>
+<P>The <CODE>StopRemoteSubclass()</CODE> function restores the remote process original window handler. 
+It accepts 1 parameter:</P>
+<UL>
+<LI><CODE>rd</CODE>: This is the same <CODE>RDATA</CODE> structure passed to <CODE>StartRemoteSubclass()</CODE> 
+and contains needed data initialized by this function.
+</UL>
+<P><CODE>StopRemoteSubclass()</CODE> releases the allocated memory and uses <CODE>RemoteExecute()</CODE> 
+to remote execute the function <CODE>RemoteStopSubclass()</CODE>:</P>
+<PRE>
+DWORD WINAPI RemoteStopSubclass(RDATA *pData)
+{
+    return (pData->pfnSetWindowLong(pData->hWnd, GWL_WNDPROC, pData->pfnOldWndProc));
+}
+</PRE>
+<P><CODE>RemoteStopSubclass()</CODE> will run in the address space of the remote process and calls 
+<CODE>SetWindowLong()</CODE> with parameter <CODE>GWL_WNDPROC</CODE> to restore the original window 
+procedure handler.</P>
+
+
+<H2>Demo</H2>
+<P>Finally to demonstrate how to use the Injection Library exported functions I wrote an application 
+that lets you use all the injection methods on any running process (if applicable !). The application 
+just fills a Listview control with all running processes and according to the user choices injects code, 
+a DLL or subclass a process window. From my tests only the following processes couldn't be injected:
+<UL>
+<LI>Windows 9x: 16-bit processes (they are considered invalid processes).
+<LI>Windows NT: idle process (PID = 0), system process (PID = 4) and protected processes.
+</UL>
+</P>
+
+<H2>History</H2>
+<UL>
+<LI>September 27, 2005: version 1.0 - Windows 95 to Windows XP.
+<LI>November 1, 2011: version 2.0 - Updated for Vista, Windows 7.
+</UL>
+</P>
+
+<H2>References</H2>
+<OL>
+<LI><A name=#1></A>"<A HREF="http://www.codeproject.com/threads/winspy.asp">Three ways to inject your code into another process</A>" by Robert Kuster 
+<LI><A name=#2></A>"<A HREF="http://www.codeproject.com/win32/remote.asp">Remote Library</A>" by António Feijão
+<LI><A name=#3></A>"<A HREF="http://www.apihooks.com/OUT/CPRPICHA.ZIP">PrcHelp</A>" by Radim Picha
+<LI><A name=#4></A>"<A HREF="http://www.wheaty.net">Windows 95 System Programming Secrets</A>" by Matt Pietrek 
+<LI><A name=#5></A>"<A HREF="http://www.amazon.com/exec/obidos/ASIN/1578701996/systemsinternals">Windows NT/2000 Native API Reference"</A> by Gary Nebbett
+<LI><A name=#6></A>"<A HREF="http://www.microsoft.com/msj/0197/exception/exception.aspx">A Crash Course On The Depths Of Win32 Structured Exception Handling</A>" by Matt Pietrek 
+<LI><A name=#7></A>"<A HREF="http://www.alexfedotov.com/articles/enumproc.asp">Enumerating Windows Processes</A>" by Alex Fedotov 
+<LI><A name=#8></A>"<A HREF="http://securityxploded.com/ntcreatethreadex.php">Remote Thread Execution in System Process using NtCreateThreadEx for Vista & Windows 7</A>" by SecurityXploded
+<LI><A name=#9></A>"<A HREF="http://processhacker.sourceforge.net/">Process Hacker</A>" by wj32
+</OL>
+
+</BODY>
+</HTML>
