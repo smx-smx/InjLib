@@ -387,13 +387,6 @@ int RemoteExecute(HANDLE hProcess,                      // Remote process handle
                Function = (LPTHREAD_START_ROUTINE)data;
 			}
 
-            // Check if function code is safe to be relocated
-            if (IsCodeSafe((PBYTE)Function, &FunctionSize) != 0)
-            {
-                ErrorCode = ERROR_ISCODESAFE;
-                break;
-            }
-
             // Allocate memory for function in remote process
             if (!(pRemoteCode = _VirtualAllocEx(hProcess, 0, FunctionSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)))
             {
@@ -907,12 +900,6 @@ int StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc)
             GetOffsets(&StubOffs);
 
             /*** Allocate memory in remote process and write a copy of WndProc() to it ***/
-            if (IsCodeSafe((PBYTE)WndProc, &WndProcSize) != 0)
-            {
-                ErrorCode = ERROR_ISCODESAFE;
-                break;
-            }
-
             rd->pfnUserWndProc = _VirtualAllocEx(rd->hProcess, NULL, WndProcSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
             if (!rd->pfnUserWndProc)
             {
