@@ -1,17 +1,18 @@
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Stub.asm                                      ;;
-;; Assembly code used for remote code injection. ;;
-;;                                               ;;
-;; (c) A. Miguel Feijao, 13/7/2005               ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+// ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+// ;; Stub.asm                                      ;;
+// ;; Assembly code used for remote code injection. ;;
+// ;;                                               ;;
+// ;; (c) A. Miguel Feijao, 13/7/2005               ;;
+// ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+// 
+// ;.386
+// ;.model flat, stdcall
+// ;option casemap :none
+// 
+// ;include \masm32\include\windows.inc
+.intel_syntax noprefix
 
-.386
-.model flat, stdcall
-option casemap :none
-
-include \masm32\include\windows.inc
-
-;; Modified EXCEPTION_REGISTRATION
+// ;; Modified EXCEPTION_REGISTRATION
 E_FRAME  STRUC
          NextFrame   DD  ?   ; Pointer or -1 for last member
          OurHandler  DD  ?   ; Pointer to our SEH handler
@@ -19,7 +20,7 @@ E_FRAME  STRUC
          SafeEBP     DD  ?   ; Safe EBP
 E_FRAME  ENDS
 
-;; RDATA (from Inject.h)
+// ;; RDATA (from Inject.h)
 RDATA   STRUC
         sSize                   DD      ?       ; Size of structure
         hProcess                DD      ?       ; Process handle
@@ -35,8 +36,8 @@ RDATA   STRUC
         pfnCallWindowProc       DD      ?       ; Address of CallWindowProc()
 RDATA   ENDS
 
-;;  OFFSETS (from Inject.h)
-;; Filled by GetOffsets()
+// ;;  OFFSETS (from Inject.h)
+// ;; Filled by GetOffsets()
 OFFSETS  STRUC
          ; Stub() data
          StubStart             DD  ?
@@ -54,23 +55,23 @@ OFFSETS  STRUC
 OFFSETS  ENDS
 
 .const
-;; (from Inject.h)
+// ;; (from Inject.h)
 REMOTE_EXCEPTION equ 10000000h                  ; Indicates that an exception ocurred
 
 .code
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; All the code between Code1Start and Code1End ;;
-;; will be injected into the remote process.    ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+// ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+// ;; All the code between Code1Start and Code1End ;;
+// ;; will be injected into the remote process.    ;;
+// ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 Code1Start EQU $
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Stub()                                     ;;
-;; - Sets an SEH frame                        ;;
-;; - Calls UserFunc()                         ;;
-;; - Handle special exit for native process   ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+// ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+// ;; Stub()                                     ;;
+// ;; - Sets an SEH frame                        ;;
+// ;; - Calls UserFunc()                         ;;
+// ;; - Handle special exit for native process   ;;
+// ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 Stub proc pParams:DWORD
         assume fs: nothing
 

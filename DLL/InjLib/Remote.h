@@ -84,44 +84,50 @@ typedef PVOID PTDB;
 
 #define CREATE_SILENT   0x80000000  // dwCreationFlags bit for CreateRemoteThread()
                                     // (Signals that Win9x process not initialized)
+#ifdef REMOTE_DEFINE_GLOBALS
+#define REMOTE_EXTERN 
+#else
+#define REMOTE_EXTERN extern
+#endif
+
 // Global variables
-int     OSMajorVersion, OSMinorVersion, OSBuildVersion;
-BOOL    OSWin9x, OSWin95, OSWin98, OSWinMe;
-BOOL    OSWinNT, OSWinNT3_2003, OSWinVista_7;
-DWORD   dwObsfucator;               // Win 9x obfuscator
-IMTE    **pMTEModTable;             // Global IMTE table
-DWORD   Win16Mutex;                 // Win16Mutex
-DWORD   Krn32Mutex;                 // Krn32Mutex
+REMOTE_EXTERN int     OSMajorVersion, OSMinorVersion, OSBuildVersion;
+REMOTE_EXTERN BOOL    OSWin9x, OSWin95, OSWin98, OSWinMe;
+REMOTE_EXTERN BOOL    OSWinNT, OSWinNT3_2003, OSWinVista_7;
+REMOTE_EXTERN DWORD   dwObsfucator;               // Win 9x obfuscator
+REMOTE_EXTERN IMTE    **pMTEModTable;             // Global IMTE table
+REMOTE_EXTERN DWORD   Win16Mutex;                 // Win16Mutex
+REMOTE_EXTERN DWORD   Krn32Mutex;                 // Krn32Mutex
 
 // NOTE: Cannot use the original Kernel32 functions names because of VC++ implicit linking.
-OPENTHREAD                  K32_OpenThread;
-GETPROCESSID                K32_GetProcessId;
-GETTHREADID                 K32_GetThreadId;
-VIRTUALALLOCEX              K32_VirtualAllocEx;
-VIRTUALFREEEX               K32_VirtualFreeEx;
-CREATEREMOTETHREAD          K32_CreateRemoteThread;
-CREATETOOLHELP32SNAPSHOT    K32_CreateToolhelp32Snapshot;
-THREAD32FIRST               K32_Thread32First;
-THREAD32NEXT                K32_Thread32Next;
+REMOTE_EXTERN OPENTHREAD                  K32_OpenThread;
+REMOTE_EXTERN GETPROCESSID                K32_GetProcessId;
+REMOTE_EXTERN GETTHREADID                 K32_GetThreadId;
+REMOTE_EXTERN VIRTUALALLOCEX              K32_VirtualAllocEx;
+REMOTE_EXTERN VIRTUALFREEEX               K32_VirtualFreeEx;
+REMOTE_EXTERN CREATEREMOTETHREAD          K32_CreateRemoteThread;
+REMOTE_EXTERN CREATETOOLHELP32SNAPSHOT    K32_CreateToolhelp32Snapshot;
+REMOTE_EXTERN THREAD32FIRST               K32_Thread32First;
+REMOTE_EXTERN THREAD32NEXT                K32_Thread32Next;
 
-LDRSHUTDOWNTHREAD           LdrShutdownThread;
-RTLNTSTATUSTODOSERROR       RtlNtStatusToDosError;
-RTLCREATEUSERTHREAD         RtlCreateUserThread;
-NTALLOCATEVIRTUALMEMORY     NtAllocateVirtualMemory;
-NTFREEVIRTUALMEMORY         NtFreeVirtualMemory;
-NTOPENTHREAD                NtOpenThread;
-NTQUERYINFORMATIONPROCESS   NtQueryInformationProcess;
-NTQUERYINFORMATIONTHREAD    NtQueryInformationThread;
-NTQUERYSYSTEMINFORMATION    NtQuerySystemInformation;
-NTQUEUEAPCTHREAD            NtQueueApcThread;
-NTTERMINATETHREAD           NtTerminateThread;
-NTCREATETHREADEX            NtCreateThreadEx;
-GETPWIN16LOCK               GetpWin16Lock;
-ENTERSYSLEVEL               EnterSysLevel;
-LEAVESYSLEVEL               LeaveSysLevel;
-ISTHREADID                  IsThreadId;
-INTERNALCREATEREMOTETHREAD  InternalCreateRemoteThread;
-INTERNALOPENTHREAD          InternalOpenThread;
+REMOTE_EXTERN LDRSHUTDOWNTHREAD           LdrShutdownThread;
+REMOTE_EXTERN RTLNTSTATUSTODOSERROR       RtlNtStatusToDosError;
+REMOTE_EXTERN RTLCREATEUSERTHREAD         RtlCreateUserThread;
+REMOTE_EXTERN NTALLOCATEVIRTUALMEMORY     NtAllocateVirtualMemory;
+REMOTE_EXTERN NTFREEVIRTUALMEMORY         NtFreeVirtualMemory;
+REMOTE_EXTERN NTOPENTHREAD                NtOpenThread;
+REMOTE_EXTERN NTQUERYINFORMATIONPROCESS   NtQueryInformationProcess;
+REMOTE_EXTERN NTQUERYINFORMATIONTHREAD    NtQueryInformationThread;
+REMOTE_EXTERN NTQUERYSYSTEMINFORMATION    NtQuerySystemInformation;
+REMOTE_EXTERN NTQUEUEAPCTHREAD            NtQueueApcThread;
+REMOTE_EXTERN NTTERMINATETHREAD           NtTerminateThread;
+REMOTE_EXTERN NTCREATETHREADEX            NtCreateThreadEx;
+REMOTE_EXTERN GETPWIN16LOCK               GetpWin16Lock;
+REMOTE_EXTERN ENTERSYSLEVEL               EnterSysLevel;
+REMOTE_EXTERN LEAVESYSLEVEL               LeaveSysLevel;
+REMOTE_EXTERN ISTHREADID                  IsThreadId;
+REMOTE_EXTERN INTERNALCREATEREMOTETHREAD  InternalCreateRemoteThread;
+REMOTE_EXTERN INTERNALOPENTHREAD          InternalOpenThread;
 
 // Functions declaration
 PTIB GetTIB();

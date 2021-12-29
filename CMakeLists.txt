@@ -1,4 +1,4 @@
-project(InjLib)
+project(InjLib C ASM)
 
 add_subdirectory(DLL/InjLib)
 add_subdirectory(EXE/InjDemo)

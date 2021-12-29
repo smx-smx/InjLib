@@ -1,7 +1,7 @@
-add_library(InjLib
+add_library(InjLib SHARED
 	GetProcAddress.c
 	Inject.c
 	LenDis.c
 	Remote.c
-	Stub.asm
+	#Stub.S
 )
