@@ -118,8 +118,6 @@ int DLL_IMP_EXP InjectDllA(HANDLE hProcess, DWORD ProcessFlags, LPCSTR szDllPath
 int DLL_IMP_EXP InjectDllW(HANDLE hProcess, DWORD ProcessFlags, LPCWSTR szDllPath, DWORD dwTimeout, HINSTANCE *hRemoteDll);
 int DLL_IMP_EXP EjectDllA(HANDLE hProcess, DWORD ProcessFlags, LPCSTR szDllPath, HINSTANCE hRemoteDll, DWORD dwTimeout);
 int DLL_IMP_EXP EjectDllW(HANDLE hProcess, DWORD ProcessFlags, LPCWSTR szDllPath, HINSTANCE hRemoteDll, DWORD dwTimeout);
-int DLL_IMP_EXP StartRemoteSubclass(PRDATA rd, USERWNDPROC WndProc);
-int DLL_IMP_EXP StopRemoteSubclass(PRDATA rd);
 
 #ifdef UNICODE
     #define InjectDll  InjectDllW
@@ -134,8 +132,6 @@ typedef DWORD DLL_IMP_EXP (* GETPROCESSINFO)(DWORD);
 typedef int DLL_IMP_EXP (* REMOTEEXECUTE)(HANDLE, DWORD, LPTHREAD_START_ROUTINE, PVOID, DWORD, DWORD, PDWORD);
 typedef int DLL_IMP_EXP (* INJECTDLL)(HANDLE, DWORD, LPCTSTR, DWORD, HINSTANCE *);
 typedef int DLL_IMP_EXP (* EJECTDLL)(HANDLE, DWORD, LPCTSTR, HINSTANCE, DWORD);
-typedef int DLL_IMP_EXP (* STARTREMOTESUBCLASS)(PRDATA, USERWNDPROC);
-typedef int DLL_IMP_EXP (* STOPREMOTESUBCLASS)(PRDATA);
 
 #ifdef __cplusplus
   }

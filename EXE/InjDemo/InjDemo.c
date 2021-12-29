@@ -41,23 +41,6 @@ typedef struct _PROCLIST{
     TCHAR   ProcessName[MAX_PATH];
 } PROCLIST, *PPROCLIST;
 
-// Subclass data
-typedef struct {
-    // Private
-    RDATA           pv;             // Data needed for subclassing
-    // Public
-    UINT            WM_Private;     // Message send by remote wnd proc
-    HWND            hDisplayWnd;    // Window that will receive WM_PRIVATE messages
-    POSTMESSAGE     PostMessage;    // PostMessage() addr
-} MYRDATA, *PMYRDATA;
-
-// Subclass list
-typedef struct _SUBCLASSLIST {
-    struct _SUBCLASSLIST *pNext;
-    DWORD   dwPID;
-    MYRDATA myRD;
-} SUBCLASSLIST, *PSUBCLASSLIST;
-
 // Sort data struct
 typedef struct _SORTDATA {
     int     Sort;                   // 0=sort by PID, 1=sort by Process name
@@ -71,7 +54,6 @@ typedef struct _SORTDATA {
 UINT        WM_Private;
 
 PPROCLIST     pProcList;      // ProcList
-PSUBCLASSLIST pSubclassList;  // SubclassList
 HWND          ghWndList;      // Listview control handle
 HWND          ghWndEdit;      // Edit window handle
 int           Sort = 0;       // Sort by column no.
@@ -91,27 +73,6 @@ BOOL ProcListSort(PPROCLIST pList, PSORTDATA pData)
     // Sort ascending by Process name
     else
         return (_tcsicmp(pData->ProcessName, pList->ProcessName) < 0);
-}
-
-// Used by SubclassList compares
-BOOL SubclassListCmpFunc(PSUBCLASSLIST pList, DWORD PID)
-{
-    return (pList->dwPID == PID);
-}
-
-// Remove closed processes from SubclassList
-void SubclassListUpdate(PSUBCLASSLIST *pSubclassList, PPROCLIST pProcessList)
-{
-    PSUBCLASSLIST pSCL = *pSubclassList;
-    PSUBCLASSLIST pAux;
-
-    while (pSCL)
-    {
-        pAux = pSCL->pNext;
-        if (!ListFind((PLIST)pProcessList, pSCL->dwPID, (CMPFUNC)ProcListCmpFunc))
-            ListDelete((PLIST *)pSubclassList, pSCL->dwPID, (CMPFUNC)SubclassListCmpFunc);
-        pSCL = pAux;
-    }
 }
 
 // Update Listview control data from ProcList
@@ -543,18 +504,6 @@ static DWORD WINAPI RemoteThread(PPARAMBLOCK pData)
  * Remote window procedure. *
  ****************************/
 #pragma check_stack(off)
-static LRESULT WINAPI MyWndProcHandler(PMYRDATA pData, HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
-{
-    switch (Msg)
-    {
-    case WM_MOUSEMOVE:
-         pData->PostMessage(pData->hDisplayWnd, pData->WM_Private, wParam, lParam);
-         break;
-    }
-
-    // Let original handler process the messages
-    return FALSE;
-}
 
 
 /**************************************************
@@ -594,7 +543,6 @@ BOOL CALLBACK DlgProc(HWND hDialog, UINT Message, WPARAM wParam, LPARAM lParam)
     TCHAR         szTitle[100];
     int           xPos, yPos;
     HWND          hRemoteWnd;
-    PSUBCLASSLIST pSC;
     OSVERSIONINFO osvi;
     LPNMLISTVIEW  pnmv;
 
@@ -605,8 +553,6 @@ BOOL CALLBACK DlgProc(HWND hDialog, UINT Message, WPARAM wParam, LPARAM lParam)
     static REMOTEEXECUTE       RemoteExecute ;
     static INJECTDLL           InjectDll;
     static EJECTDLL            EjectDll;
-    static STARTREMOTESUBCLASS StartRemoteSubclass;
-    static STOPREMOTESUBCLASS  StopRemoteSubclass;
 
     // Private message send by subclassed window proc.
     if (Message == WM_Private)
@@ -709,13 +655,10 @@ BOOL CALLBACK DlgProc(HWND hDialog, UINT Message, WPARAM wParam, LPARAM lParam)
          InjectDll = (INJECTDLL)GetProcAddress(hInjLib, "InjectDllA");
          EjectDll = (EJECTDLL)GetProcAddress(hInjLib, "EjectDllA");
 #endif
-         StartRemoteSubclass = (STARTREMOTESUBCLASS)GetProcAddress(hInjLib, "StartRemoteSubclass");
-         StopRemoteSubclass = (STOPREMOTESUBCLASS)GetProcAddress(hInjLib, "StopRemoteSubclass");
 
          if (!GetProcessInfo ||
              !RemoteExecute ||
-             !InjectDll || !EjectDll ||
-             !StartRemoteSubclass || !StopRemoteSubclass)
+             !InjectDll || !EjectDll)
          {
              _stprintf(s, TEXT("Failed to load all exported functions."));
              AddLine(s, 1);
@@ -738,7 +681,6 @@ BOOL CALLBACK DlgProc(HWND hDialog, UINT Message, WPARAM wParam, LPARAM lParam)
                  fTimer = TRUE;
                  // Update Listview contents
                  _EnumProcesses(EnumProcessCallback, NULL, NULL);
-                 SubclassListUpdate(&pSubclassList, pProcList);
                  ListViewUpdate(ghWndList, pProcList);
                  ListDeleteAll((PLIST *)&pProcList);
                  fTimer = FALSE;
@@ -791,135 +733,6 @@ BOOL CALLBACK DlgProc(HWND hDialog, UINT Message, WPARAM wParam, LPARAM lParam)
              // Open selected process
              if (!(hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, PID)))
                  return TRUE;
-
-             /*** Subclass ***/
-             if (IsDlgButtonChecked(hDialog, IDC_SUBCLASS) == BST_CHECKED)
-             {
-                 // Subclass only allowed in GUI processes
-                 if (HIWORD(ProcessFlags) != IMAGE_SUBSYSTEM_WINDOWS_GUI)
-                 {
-                     _stprintf(s, TEXT("Subclass only allowed in GUI processes."));
-                     AddLine(s, 1);
-                     CloseHandle(hProcess);
-                     return TRUE;
-                 }
-
-                 /*** Start subclass ***/
-                 if (IsDlgButtonChecked(hDialog, IDC_START) == BST_CHECKED)
-                 {
-                     // Get process main window
-                     hRemoteWnd = GetWinHandle(PID);
-                     if (!hRemoteWnd)
-                     {
-                         _stprintf(s, TEXT("Could not locate remote window !"));
-                         AddLine(s, 1);
-                         CloseHandle(hProcess);
-                         return TRUE;
-                     }
-
-                     // Check if process already subclassed
-                     pSC = (PSUBCLASSLIST)ListFind((PLIST)pSubclassList, PID, (CMPFUNC)SubclassListCmpFunc);
-                     if (pSC)
-                     {
-                         _stprintf(s, TEXT("Process already subclassed !"));
-                         AddLine(s, 1);
-                         CloseHandle(hProcess);
-                         return TRUE;
-                     }
-
-                     // Not found, set data for Subclass
-                     if (!(pSC = malloc(sizeof(SUBCLASSLIST))))
-                     {
-                         _stprintf(s, TEXT("malloc() failed !"));
-                         AddLine(s, 1);
-                         CloseHandle(hProcess);
-                         return TRUE;
-                     }
-
-                     memset(pSC, 0, sizeof(SUBCLASSLIST));
-                     pSC->dwPID = PID;
-                     pSC->myRD.pv.Size = sizeof(MYRDATA);
-                     pSC->myRD.pv.hProcess = hProcess;
-                     pSC->myRD.pv.ProcessFlags = ProcessFlags;
-                     pSC->myRD.pv.dwTimeout = INFINITE;
-                     pSC->myRD.pv.hWnd = hRemoteWnd;
-                     pSC->myRD.hDisplayWnd = hDialog;
-                     pSC->myRD.WM_Private = WM_Private;
-
-#ifdef UNICODE
-                     pSC->myRD.PostMessage = (POSTMESSAGE)GetProcAddress(GetModuleHandle(TEXT("User32.dll")), "PostMessageW");
-#else
-                     pSC->myRD.PostMessage = (POSTMESSAGE)GetProcAddress(GetModuleHandle(TEXT("User32.dll")), "PostMessageA");
-#endif
-
-                     if (!pSC->myRD.PostMessage)
-                     {
-                         _stprintf(s, TEXT("GetProcAddress() failed !"));
-                         AddLine(s, 1);
-                         free(pSC);
-                         CloseHandle(hProcess);
-                         return TRUE;
-                     }
-
-                     // Subclass the window
-                     r = StartRemoteSubclass((PRDATA)&pSC->myRD, MyWndProcHandler);
-
-                     // If OK add data into SubclassList
-                     if (r == 0)
-                         ListInsert((PLIST *)&pSubclassList, (PLIST)pSC);
-                     // If ERROR free memory allocated for Subclass
-                     else
-                         free(pSC);
-
-                     if (r & LOCAL_EXCEPTION)
-                     {
-                         _stprintf(s, TEXT("Exception in StartRemoteSubclass(): %X"), r & ~LOCAL_EXCEPTION);
-                         AddLine(s, 1);
-                     }
-                     else
-                     {
-                         _stprintf(s, TEXT("StartRemoteSubclass(hWnd=%X): %d (%s)"), hRemoteWnd, r, r <= ERROR_MAX ? szError[r] : TEXT("???"));
-                         AddLine(s, 1);
-                     }
-                 }
-
-                 /*** Stop subclass ***/
-                 if (IsDlgButtonChecked(hDialog, IDC_STOP) == BST_CHECKED)
-                 {
-                     // Check if process subclassed
-                     pSC = (PSUBCLASSLIST)ListFind((PLIST)pSubclassList, PID, (CMPFUNC)SubclassListCmpFunc);
-                     if (!pSC)
-                     {
-                         _stprintf(s, TEXT("Process not subclassed !"));
-                         AddLine(s, 1);
-                         CloseHandle(hProcess);
-                         return TRUE;
-                     }
-
-                     pSC->myRD.pv.hProcess = hProcess;
-                     pSC->myRD.pv.ProcessFlags = ProcessFlags;
-
-                     // Restore original window handler
-                     r = StopRemoteSubclass((PRDATA)&pSC->myRD);
-
-                     hRemoteWnd = pSC->myRD.pv.hWnd;
-
-                     // If OK delete data from SubclassList
-                     if (r == 0)
-                         ListDelete((PLIST *)&pSubclassList, PID, (CMPFUNC)SubclassListCmpFunc);
-
-                     if (r & LOCAL_EXCEPTION)
-                     {
-                         _stprintf(s, TEXT("Exception in StopRemoteSubclass(): %X"), r & ~LOCAL_EXCEPTION);
-                         AddLine(s, 1);
-                     }
-                     else
-                     {
-                         _stprintf(s, TEXT("StopRemoteSubclass(hWnd=%X): %d (%s)"), hRemoteWnd, r, r <= ERROR_MAX ? szError[r] : TEXT("???"));
-                         AddLine(s, 1);
-                     }
-                 }
-             }
 
              /*** Dll Injection/Ejection ***/
              if (IsDlgButtonChecked(hDialog, IDC_INJDLL) == BST_CHECKED)
